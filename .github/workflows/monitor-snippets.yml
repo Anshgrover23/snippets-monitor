@@ -21,16 +21,38 @@ jobs:
                -H "Accept: application/vnd.github.v3+json" \
                https://api.github.com/repos/tscircuit/snippets/commits > snippets_commits.json
 
-      # Step 3: Analyze the fetched commits
-      - name: Analyze Commits
+      # Step 3: Analyze Commit Status
+      - name: Get Commit Status
         run: |
           LATEST_COMMIT=$(jq -r '.[0].sha' snippets_commits.json)
           echo "Latest Commit SHA: $LATEST_COMMIT"
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+               -H "Accept: application/vnd.github.v3+json" \
+               https://api.github.com/repos/tscircuit/snippets/commits/$LATEST_COMMIT/status > commit_status.json
+          echo "Fetched commit status."
 
-      # Step 4: Notify on new commits (via Discord or Slack)
+      # Step 4: Extract Failed Checks
+      - name: Extract Failed Checks
+        run: |
+          FAILED_CHECKS=$(jq -r '.statuses[] | select(.state == "failure") | .context' commit_status.json)
+          echo "Failed Checks: $FAILED_CHECKS"
+          if [ -z "$FAILED_CHECKS" ]; then
+            echo "All checks passed for the latest commit."
+          else
+            echo "Some checks failed: $FAILED_CHECKS" > failed_checks.log
+          fi
+
+      # Step 5: Notify with Detailed Information
       - name: Notify via Discord
         if: success()
         run: |
+          if [ -f failed_checks.log ]; then
+            CHECKS=$(cat failed_checks.log | jq -R -s '.')
+            MESSAGE="Playwright Test Status: Failed checks detected: $CHECKS"
+          else
+            MESSAGE="Playwright Test Status: All checks passed for the latest commit."
+          fi
+
           curl -H "Content-Type: application/json" \
-               -X POST -d '{"content": "New commit detected in the Snippets repo! Check it out: https://github.com/tscircuit/snippets/commits"}' \
+               -X POST -d "{\"content\": \"$MESSAGE\"}" \
                ${{ secrets.DISCORD_WEBHOOK_URL }}
