@@ -1,0 +1,36 @@
+name: Monitor Snippets Repository
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # Runs every 15 minutes
+  workflow_dispatch:        # Allows manual trigger
+
+jobs:
+  monitor-snippets:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out the test repo
+      - name: Checkout Test Repo
+        uses: actions/checkout@v3
+
+      # Step 2: Fetch recent commits from snippets repo
+      - name: Fetch Recent Commits
+        run: |
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+               -H "Accept: application/vnd.github.v3+json" \
+               https://api.github.com/repos/tscircuit/snippets/commits > snippets_commits.json
+
+      # Step 3: Analyze the fetched commits
+      - name: Analyze Commits
+        run: |
+          LATEST_COMMIT=$(jq -r '.[0].sha' snippets_commits.json)
+          echo "Latest Commit SHA: $LATEST_COMMIT"
+
+      # Step 4: Notify on new commits (via Discord or Slack)
+      - name: Notify via Discord
+        if: success()
+        run: |
+          curl -H "Content-Type: application/json" \
+               -X POST -d '{"content": "New commit detected in the Snippets repo! Check it out: https://github.com/tscircuit/snippets/commits"}' \
+               ${{ secrets.DISCORD_WEBHOOK_URL }}
