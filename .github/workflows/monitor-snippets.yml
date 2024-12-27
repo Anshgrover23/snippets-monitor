@@ -1,4 +1,4 @@
-name: Monitor Snippets Repository
+name: Monitor Checks for Snippets Repo
 
 on:
   schedule:
@@ -6,53 +6,52 @@ on:
   workflow_dispatch:        # Allows manual trigger
 
 jobs:
-  monitor-snippets:
+  monitor-checks:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Check out the test repo
+      # Step 1: Check out the repository
       - name: Checkout Test Repo
         uses: actions/checkout@v3
 
-      # Step 2: Fetch recent commits from snippets repo
-      - name: Fetch Recent Commits
+      # Step 2: Fetch the latest commit SHA from the snippets repo
+      - name: Fetch Latest Commit SHA
         run: |
-          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-               -H "Accept: application/vnd.github.v3+json" \
-               https://api.github.com/repos/tscircuit/snippets/commits > snippets_commits.json
+          curl -L \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/tscircuit/snippets/commits/main \
+            | jq -r '.sha' > latest_commit_sha.txt
+          echo "Latest Commit SHA fetched: $(cat latest_commit_sha.txt)"
 
-      # Step 3: Analyze Commit Status
-      - name: Get Commit Status
+      # Step 3: Fetch check runs for the latest commit
+      - name: Fetch Check Runs
         run: |
-          LATEST_COMMIT=$(jq -r '.[0].sha' snippets_commits.json)
-          echo "Latest Commit SHA: $LATEST_COMMIT"
-          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-               -H "Accept: application/vnd.github.v3+json" \
-               https://api.github.com/repos/tscircuit/snippets/commits/$LATEST_COMMIT/status > commit_status.json
-          echo "Fetched commit status."
+          LATEST_COMMIT_SHA=$(cat latest_commit_sha.txt)
+          curl -L \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/tscircuit/snippets/commits/${LATEST_COMMIT_SHA}/check-runs \
+            > check_runs.json
+          echo "Check Runs Fetched for Commit: ${LATEST_COMMIT_SHA}"
 
-      # Step 4: Extract Failed Checks
-      - name: Extract Failed Checks
+      # Step 4: Parse and Notify about Check Runs
+      - name: Analyze and Notify
         run: |
-          FAILED_CHECKS=$(jq -r '.statuses[] | select(.state == "failure") | .context' commit_status.json)
-          echo "Failed Checks: $FAILED_CHECKS"
-          if [ -z "$FAILED_CHECKS" ]; then
-            echo "All checks passed for the latest commit."
-          else
-            echo "Some checks failed: $FAILED_CHECKS" > failed_checks.log
-          fi
+          STATUS=$(jq -r '.check_runs[] | .status' check_runs.json)
+          CONCLUSION=$(jq -r '.check_runs[] | .conclusion' check_runs.json)
+          OUTPUT="Check Runs Status:\n"
+          for i in $(seq 0 $(jq '.check_runs | length - 1' check_runs.json)); do
+            NAME=$(jq -r ".check_runs[$i].name" check_runs.json)
+            STATUS=$(jq -r ".check_runs[$i].status" check_runs.json)
+            CONCLUSION=$(jq -r ".check_runs[$i].conclusion" check_runs.json)
+            OUTPUT="${OUTPUT}\n${NAME}: ${STATUS} (${CONCLUSION})"
+          done
+          echo -e "${OUTPUT}"
 
-      # Step 5: Notify with Detailed Information
-      - name: Notify via Discord
-        if: success()
-        run: |
-          if [ -f failed_checks.log ]; then
-            CHECKS=$(cat failed_checks.log | jq -R -s '.')
-            MESSAGE="Playwright Test Status: Failed checks detected: $CHECKS"
-          else
-            MESSAGE="Playwright Test Status: All checks passed for the latest commit."
-          fi
-
+          # Send Notification to Discord
           curl -H "Content-Type: application/json" \
-               -X POST -d "{\"content\": \"$MESSAGE\"}" \
+               -X POST -d "{\"content\": \"GitHub Checks for Commit ${LATEST_COMMIT_SHA}:\n${OUTPUT}\"}" \
                ${{ secrets.DISCORD_WEBHOOK_URL }}
